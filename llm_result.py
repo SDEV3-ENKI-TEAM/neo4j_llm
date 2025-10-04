@@ -268,64 +268,116 @@ def main():
     # 3. 분석할 트레이스 로드
     # 프로젝트(현재 파일 위치) 기준의 result 폴더를 보장하고, 예시 파일이 없으면 생성
     here = Path(__file__).resolve().parent
-    result_dir = here / "result"
+    test_dir = here / "test"
+    test_dir.mkdir(parents=True, exist_ok=True)
+
+    json_files = list(test_dir.glob("*.json"))
+
+    if not json_files:
+        print(f"\n[!] {test_dir} 폴더에 JSON 파일이 없습니다.")
+        print("    예시 파일을 생성합니다.")
+        sample_path = test_dir / "trace-example.json"
+        sample = {"traceID": "example-trace-id", "spans": []}
+        sample_path.write_text(
+            json.dumps(sample, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        json_files = [sample_path]
+        print(f"    생성됨: {sample_path.name}")
+
+    print(f"\n[+] {len(json_files)}개의 트레이스 파일 발견")
+
+    # 결과 저장 디렉토리
+    result_dir = here / "analysis_results"
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    test_trace_path = result_dir / "trace-example.json"
+    # 배치 분석 실행
+    all_results = []
 
-    if test_trace_path.exists():
-        print(f"\n[+] 트레이스 로드: {test_trace_path}")
-        target_trace = load_trace_file(str(test_trace_path))
-    else:
-        # 파일이 없으면 예시 데이터를 생성해서 저장
-        print(f"\n[!] 파일을 찾을 수 없습니다: {test_trace_path}")
-        print("    예시 데이터를 생성합니다.")
-        sample = {"traceID": "51a239b290c1e6e4662092070fd3724b", "spans": []}
+    for i, trace_file in enumerate(json_files, 1):
+        print("\n" + "=" * 70)
+        print(f"[{i}/{len(json_files)}] 분석 중: {trace_file.name}")
+        print("=" * 70)
+
         try:
-            test_trace_path.write_text(json.dumps(sample, ensure_ascii=False, indent=2), encoding="utf-8")
-            print(f"    예시 파일 생성됨: {test_trace_path}")
+            # 트레이스 로드
+            target_trace = load_trace_file(str(trace_file))
+            trace_id = target_trace.get("traceID", "unknown")
+
+            # 유사 트레이스 검색
+            similar_traces = retriever.find_similar_traces(
+                target_trace_data=target_trace, threshold=0.8, top_k=3
+            )
+
+            # GPT 분석
+            analysis_result = analyzer.analyze_with_cot(
+                target_trace=target_trace, similar_traces=similar_traces
+            )
+
+            # 결과 미리보기
+            print("\n" + "-" * 70)
+            print("분석 완료")
+            print("-" * 70)
+            preview = (
+                analysis_result[:300] + "..."
+                if len(analysis_result) > 300
+                else analysis_result
+            )
+            print(preview)
+
+            # 개별 결과 저장
+            result_data = {
+                "target_trace_id": trace_id,
+                "source_file": trace_file.name,
+                "analysis_timestamp": __import__("datetime").datetime.now().isoformat(),
+                "similar_traces": similar_traces,
+                "analysis": analysis_result,
+                "settings": {
+                    "similarity_threshold": 0.8,
+                    "top_k": 3,
+                    "model": "gpt-4o",
+                },
+            }
+
+            output_file = result_dir / f"analysis_{trace_file.stem}.json"
+            with open(output_file, "w", encoding="utf-8") as f:
+                json.dump(result_data, f, ensure_ascii=False, indent=2)
+
+            print(f"\n  [+] 저장: {output_file.name}")
+            all_results.append(result_data)
+
         except Exception as e:
-            print(f"    예시 파일 생성 실패: {e}")
-        target_trace = sample
+            print(f"\n  [!] 분석 실패: {e}")
+            continue
 
-    # 4. 유사 트레이스 검색 (Graph RAG)
-    similar_traces = retriever.find_similar_traces(
-        target_trace_data=target_trace, threshold=0.8, top_k=3
-    )
-
-    # 5. GPT 분석 실행 (Chain-of-Thought)
-    analysis_result = analyzer.analyze_with_cot(
-        target_trace=target_trace, similar_traces=similar_traces
-    )
-
-    # 6. 결과 출력
-    print("\n" + "=" * 70)
-    print("분석 결과")
-    print("=" * 70)
-    print(f"\n대상 Trace ID: {target_trace.get('traceID')}")
-    print(f"참조한 유사 트레이스: {len(similar_traces)}개")
-    print("\n" + "-" * 70)
-    print(analysis_result)
-    print("-" * 70)
-
-    # 7. 결과 저장
-    output_file = "trace_analysis_result.json"
-    result_data = {
-        "target_trace_id": target_trace.get("traceID"),
+    # 전체 요약 저장
+    summary_file = result_dir / "analysis_summary.json"
+    summary = {
+        "total_analyzed": len(all_results),
+        "total_files": len(json_files),
         "analysis_timestamp": __import__("datetime").datetime.now().isoformat(),
-        "similar_traces": similar_traces,
-        "analysis": analysis_result,
-        "settings": {"similarity_threshold": 0.8, "top_k": 3, "model": "gpt-4o"},
+        "results": [
+            {
+                "trace_id": r["target_trace_id"],
+                "file": r["source_file"],
+                "similar_count": len(r["similar_traces"]),
+            }
+            for r in all_results
+        ],
     }
 
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(result_data, f, ensure_ascii=False, indent=2)
+    with open(summary_file, "w", encoding="utf-8") as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
 
-    print(f"\n[+] 결과 저장: {output_file}")
+    # 최종 결과
+    print("\n" + "=" * 70)
+    print("배치 분석 완료")
+    print("=" * 70)
+    print(f"성공: {len(all_results)}/{len(json_files)} 파일")
+    print(f"결과 위치: {result_dir}")
+    print(f"요약 파일: {summary_file.name}")
+    print("=" * 70)
 
-    # 8. 연결 종료
     retriever.close()
-    print("\n[+] 분석 완료")
 
 
 if __name__ == "__main__":
