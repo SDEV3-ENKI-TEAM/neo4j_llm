@@ -139,10 +139,10 @@ class GPTTraceAnalyzer:
         print(f"[+] GPT API 연결 ({model})")
 
     def _format_target_trace(self, trace_data: Dict[str, Any]):
-        """분석 대상 트레이스 포맷"""
+        # 트레이스 포맷
         lines = [f"### 분석 대상 Trace: {trace_data.get('traceID', 'Unknown')}"]
         lines.append(f"총 Span 수: {len(trace_data.get('spans', []))}")
-        lines.append("\n#### 주요 이벤트:")
+        lines.append("\n 주요 이벤트:")
 
         for i, span in enumerate(trace_data.get("spans", [])[:8], 1):
             tags = {t["key"]: t["value"] for t in span.get("tags", [])}
@@ -164,12 +164,12 @@ class GPTTraceAnalyzer:
     def _format_similar_traces(self, similar_traces: List[Dict[str, Any]]):
         # 유사 트레이스 포맷
         if not similar_traces:
-            return "유사한 과거 사례 없음"
+            return "유사한 행위 없음"
 
-        lines = ["### 유사한 과거 트레이스 (참고용)"]
+        lines = ["### 유사 트레이스 (참고용)"]
 
         for i, trace in enumerate(similar_traces, 1):
-            lines.append(f"\n#### 유사 사례 {i}")
+            lines.append(f"\n 유사 트레이스 {i}")
             lines.append(f"- Trace ID: {trace['traceID']}")
             lines.append(f"- 유사도 점수: {trace['similarity']:.4f}")
             lines.append(f"- 패턴: {trace['pattern']}")
@@ -180,8 +180,8 @@ class GPTTraceAnalyzer:
 
             # 주요 이벤트
             if trace["details"]:
-                lines.append("- 주요 활동:")
-                for detail in trace["details"][:5]:
+                lines.append("- 주요 이벤트:")
+                for detail in trace["details"][:5]:   
                     if detail["event"]:
                         proc = (
                             detail["process"].split("\\")[-1]
@@ -249,48 +249,45 @@ def load_trace_file(file_path: str):  # Dict[str, Any]
 
 def main():
 
-    print("=" * 70)
+    print("=" * 70) 
     print("Graph RAG 트레이스 분석 시스템")
     print("=" * 70)
 
     if not OPENAI_API_KEY:
-        print("\n[!] 오류: OPENAI_API_KEY가 설정되지 않았습니다.")
-        print("    .env 파일에 다음을 추가하세요:")
-        print("    OPENAI_API_KEY=sk-your-api-key")
+        print("openai 오류")
         return
 
-    # 1. Neo4j 검색기 초기화
+    # neo4j, gpt 초기화
     retriever = TraceGraphRetriever(NEO4J_URI, NEO4J_USER, NEO4J_PASSWORD)
 
-    # 2. GPT 분석기 초기화
     analyzer = GPTTraceAnalyzer(OPENAI_API_KEY, model="gpt-4o")
 
     # 3. 분석할 트레이스 로드
-    # 프로젝트(현재 파일 위치) 기준의 result 폴더를 보장하고, 예시 파일이 없으면 생성
+    # data 폴더에서 분석 대상 json 파일을 로드함
     here = Path(__file__).resolve().parent
-    test_dir = here / "test"
+    test_dir = here / "data"
     test_dir.mkdir(parents=True, exist_ok=True)
-
-    json_files = list(test_dir.glob("*.json"))
+    json_files = sorted(test_dir.rglob("*.json"), key=lambda p: str(p))
 
     if not json_files:
         print(f"\n[!] {test_dir} 폴더에 JSON 파일이 없습니다.")
-        print("    예시 파일을 생성합니다.")
+        print("\n예시 파일을 생성합니다.")
         sample_path = test_dir / "trace-example.json"
         sample = {"traceID": "example-trace-id", "spans": []}
         sample_path.write_text(
             json.dumps(sample, ensure_ascii=False, indent=2), encoding="utf-8"
         )
         json_files = [sample_path]
-        print(f"    생성됨: {sample_path.name}")
+        print(f"생성됨: {sample_path.name}")
 
-    print(f"\n[+] {len(json_files)}개의 트레이스 파일 발견")
+    print(f"\n[+] {len(json_files)}개의 트레이스 파일 발견")  
+    # 만약 분석 대상 파일이 존재할 경우
 
-    # 결과 저장 디렉토리
-    result_dir = here / "analysis_results"
+    # 분석결과 저장할 곳
+    result_dir = here / "analysis_results"  
     result_dir.mkdir(parents=True, exist_ok=True)
 
-    # 배치 분석 실행
+    # 분석 실행
     all_results = []
 
     for i, trace_file in enumerate(json_files, 1):
@@ -308,7 +305,7 @@ def main():
                 target_trace_data=target_trace, threshold=0.8, top_k=3
             )
 
-            # GPT 분석
+            # gpt + CoT 상세 분석
             analysis_result = analyzer.analyze_with_cot(
                 target_trace=target_trace, similar_traces=similar_traces
             )
